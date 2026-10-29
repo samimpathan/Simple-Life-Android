@@ -11,23 +11,62 @@ build:
 runs-on: ubuntu-latest
 
 steps:
-  - name: Checkout source code
+  - name: Checkout repository
     uses: actions/checkout@v4
 
-  - name: Set up JDK 17
+  - name: Find and extract ZIP
+    shell: bash
+    run: |
+      set -e
+      ZIP_FILE=$(find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname "*.zip" | head -n 1)
+      if [ -z "$ZIP_FILE" ]; then
+        echo "ERROR: No ZIP file found in the repository."
+        exit 1
+      fi
+      mkdir -p "$RUNNER_TEMP/project"
+      unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/project"
+
+  - name: Find Android project
+    shell: bash
+    run: |
+      set -e
+      PROJECT_DIR=""
+      while IFS= read -r file; do
+        dir=$(dirname "$file")
+        if [ -f "$dir/app/build.gradle" ] || [ -f "$dir/app/build.gradle.kts" ]; then
+          PROJECT_DIR="$dir"
+          break
+        fi
+      done < <(find "$RUNNER_TEMP/project" \( -name settings.gradle -o -name settings.gradle.kts \) -type f)
+
+      if [ -z "$PROJECT_DIR" ]; then
+        echo "ERROR: Android project files not found inside ZIP."
+        find "$RUNNER_TEMP/project" -maxdepth 4 -type f | head -n 100
+        exit 1
+      fi
+
+      echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      echo "Android project found."
+
+  - name: Set up Java
     uses: actions/setup-java@v4
     with:
       distribution: temurin
       java-version: '17'
 
-  - name: Set up Gradle
-    uses: gradle/actions/setup-gradle@v4
+  - name: Install Gradle
+    run: |
+      wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip -O "$RUNNER_TEMP/gradle.zip"
+      unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+      echo "$RUNNER_TEMP/gradle-8.7/bin" >> "$GITHUB_PATH"
 
-  - name: Build APK
-    run: gradle assembleDebug
+  - name: Build debug APK
+    working-directory: ${{ env.PROJECT_DIR }}
+    run: gradle assembleDebug --no-daemon
 
   - name: Upload APK
     uses: actions/upload-artifact@v4
     with:
       name: Simple-Life-APK
-      path: app/build/outputs/apk/debug/*.apk 
+      path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+      if-no-files-found: error
